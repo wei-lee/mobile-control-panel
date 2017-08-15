@@ -4,8 +4,8 @@ console.log('Mobile Control Panel Extension Loaded');
 window.OPENSHIFT_CONSTANTS.PROJECT_NAVIGATION.splice(1, 0, {
   label: "Mobile",
   iconClass: "fa fa-mobile",
-  href: "/mobile",
-  prefixes: ["/mobile/"],
+  href: "/browse/mobileapps",
+  prefixes: ["/browse/mobileapps"],
   isValid: function() {
     // TODO: Can this check if any mobile apps exist first?
     return true;
@@ -24,42 +24,164 @@ angular
   .module('mobileOverviewExtension', ['openshiftConsole'])
   .config(function($routeProvider) {
     $routeProvider
-      .when('/project/:project/mobile', {
-        templateUrl: ' extensions/mcp/mobile.html',
-        controller: 'MobileOverviewController'
-      })
       .when('/project/:project/create-mobileapp', {
         templateUrl: 'extensions/mcp/create-mobileapp.html',
         controller: 'CreateMobileappController'
       })
+      .when('/project/:project/browse/mobileapps', {
+        templateUrl: 'extensions/mcp/mobileapps.html',
+        controller: 'MobileAppsController',
+        reloadOnSearch: false
+      })
+      .when('/project/:project/browse/mobileapps/:mobileapp', {
+        templateUrl: 'extensions/mcp/mobileapp.html',
+        controller: 'MobileAppController',
+        reloadOnSearch: false
+      })
     }
   )
-  .controller('MobileOverviewController', ['$scope', '$controller', '$routeParams', 'ProjectsService', 'APIService', 'DataService', function ($scope, $controller, $routeParams, ProjectsService, APIService, DataService) {
-    // Initialize the super class and extend it.
-    angular.extend(this, $controller('OverviewController', {$scope: $scope}));
-    console.log('MobileOverviewController');
+   .controller('MobileAppsController', ['$scope', '$routeParams', 'DataService', 'ProjectsService', '$filter', function($scope, $routeParams, DataService, ProjectsService, $filter) {
+      $scope.projectName = $routeParams.project;
+      $scope.mobileapp = null;
+      $scope.mobileapps = null;
+      $scope.alerts = {};
+      $scope.renderOptions = $scope.renderOptions || {};
+      $scope.renderOptions.hideFilterWidget = true;
+      $scope.breadcrumbs = [
+        {
+          title: "Mobile",
+          link: "project/" + $routeParams.project + "/browse/mobileapps"
+        },
+        {
+          title: $routeParams.mobileapp
+        }
+      ];
 
-    // TODO: hook these up to service listing and filtering based on 'mobile' annotations
-    $scope.mobileservices = [];
-    $scope.nonmobileservices = [];
+      var watches = [];
 
+      $scope.serviceInstances = [];
+      $scope.serviceClasses = [];
+      var mobileappResolved = function(mobileapp, action) {
+        $scope.loaded = true;
+        $scope.mobileapp = mobileapp;
 
-    ProjectsService
-      .get($routeParams.project)
-      .then(_.spread(function(project, context) {
-        
-        $scope.project = project;
+        if (action === "DELETED") {
+          $scope.alerts["deleted"] = {
+            type: "warning",
+            message: "This mobile app has been deleted."
+          };
+        }
+      };
+      var resource = {
+        group: 'mobile.k8s.io',
+        resource: 'mobileapps'
+      };
+
+      ProjectsService
+        .get($routeParams.project)
+        .then(_.spread(function(project, context) {
+                  $scope.project = project;
         $scope.context = context;
-        DataService.list({
+        watches.push(DataService.watch({
             group: 'mobile.k8s.io',
             resource: 'mobileapps'
-          }, $scope.context).then(function(resources) {
+          }, $scope.context, function(resources) {
           $scope.mobileapps = resources.by("metadata.name");
-          $scope.emptyMessage = "No " + APIService.kindToResource('MobileApp', true) + " to show";
+          $scope.emptyMessage = "No Mobile Apps to show";
+        }));
+
+        DataService.list({
+          group: 'servicecatalog.k8s.io',
+          resource: 'serviceclasses'
+        }, context, function(serviceClasses) {
+          $scope.serviceClasses = serviceClasses.by('metadata.name');
+
+          watches.push(DataService.watch({
+            group: 'servicecatalog.k8s.io',
+            resource: 'instances'
+          }, context, function(serviceInstances) {
+            $scope.serviceInstances = serviceInstances.by('metadata.name');
+            _.each($scope.serviceInstances, function(serviceInstance) {
+              serviceInstance.displayName = _.get($scope.serviceClasses, [serviceInstance.spec.serviceClassName, 'externalMetadata', 'displayName']);
+              serviceInstance.iconClass = _.get($scope.serviceClasses, [serviceInstance.spec.serviceClassName, 'externalMetadata', 'console.openshift.io/iconClass']);
+            })
+          }));
         });
+    }));
+
+    $scope.$on('$destroy', function(){
+      DataService.unwatchAll(watches);
+    });
+
+   }])
+    .controller('MobileAppController', ['$scope', '$routeParams', 'DataService', 'ProjectsService', '$filter', function ($scope, $routeParams, DataService, ProjectsService, $filter) {
+      $scope.projectName = $routeParams.project;
+      $scope.mobileapp = null;
+      $scope.mobileapps = null;
+      $scope.alerts = {};
+      $scope.renderOptions = $scope.renderOptions || {};
+      $scope.renderOptions.hideFilterWidget = true;
+      $scope.breadcrumbs = [
+        {
+          title: "Mobile",
+          link: "project/" + $routeParams.project + "/browse/mobileapps"
+        },
+        {
+          title: $routeParams.mobileapp
+        }
+      ];
+      $scope.syncconfig = '{\n  "TODO":"SOME CONFIG"\n}';
+
+
+      var resource = {
+        group: 'mobile.k8s.io',
+        resource: 'mobileapps'
+      };
+
+      var watches = [];
+
+      var mobileappResolved = function(mobileapp, action) {
+        $scope.loaded = true;
+        $scope.mobileapp = mobileapp;
+
+        if (action === "DELETED") {
+          $scope.alerts["deleted"] = {
+            type: "warning",
+            message: "This mobileapp has been deleted."
+          };
+        }
+      };
+
+      ProjectsService
+        .get($routeParams.project)
+        .then(_.spread(function(project, context) {
+          $scope.project = project;
+          $scope.projectContext = context;
+          DataService
+            .get(resource, $routeParams.mobileapp, context, { errorNotification: false })
+            .then(function(mobileapp) {
+              mobileappResolved(mobileapp);
+              watches.push(DataService.watchObject(resource, $routeParams.mobileapp, context, mobileappResolved));
+            }, function(e) {
+              $scope.loaded = true;
+              $scope.alerts["load"] = {
+                type: "error",
+                message: "The mobile app details could not be loaded.",
+                details: $filter('getErrorDetails')(e)
+              };
+            }
+          );
+
+          watches.push(DataService.watch(resource, context, function(mobileapps) {
+            $scope.mobileapps = mobileapps.by("metadata.name");
+          }));
+
+          $scope.$on('$destroy', function(){
+            DataService.unwatchAll(watches);
+          });
 
       }));
-   }])
+    }])
    .controller('CreateMobileappController',
                 function($filter,
                         $location,
@@ -80,7 +202,7 @@ angular
           link: "project/" + $scope.projectName
         },
         {
-          title: "Mobile Apps",
+          title: "Mobile",
           link: "project/" + $scope.projectName + "/mobile"
         },
         {
